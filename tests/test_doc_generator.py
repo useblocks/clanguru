@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from textwrap import dedent
 
@@ -318,6 +319,37 @@ def test_doc_structure_for_gtest_files(tmp_path: Path, gtest_include_path: Path)
     generate_documentation(translation_unit, MarkdownFormatter(MarkdownFlavour.Myst), output_file)
 
     assert output_file.read_text() == expected_output
+
+
+def test_doc_structure_lists_only_the_declarations_of_the_source_file(tmp_path: Path) -> None:
+    (tmp_path / "helper.h").write_text("static inline int helper(void) { return 1; }\nclass HeaderClass {};\n", newline="\n")
+    source_file = tmp_path / "source.cc"
+    source_file.write_text('#include "helper.h"\nint own_function() { return helper(); }\nclass OwnClass {};\n', newline="\n")
+    compile_db = make_compile_commands(tmp_path, source_file, [tmp_path])
+
+    doc_structure = generate_doc_structure(CLangParser().load(source_file, CompilationOptionsManager(compile_db)))
+
+    assert {section.title: [sub.title for sub in section.subsections] for section in doc_structure.sections} == {
+        "Functions": ["own_function"],
+        "Classes": ["OwnClass"],
+    }
+
+
+def test_doc_structure_follows_the_branches_of_a_system_include(tmp_path: Path) -> None:
+    system_dir = tmp_path / "system"
+    system_dir.mkdir()
+    (system_dir / "product_features.h").write_text("#define FEATURE 1\n", newline="\n")
+    source_file = tmp_path / "source.c"
+    source_file.write_text(
+        "#include <product_features.h>\n#ifdef FEATURE\nint with_feature(void) { return 1; }\n#else\nint without_feature(void) { return 0; }\n#endif\n",
+        newline="\n",
+    )
+    compile_db = tmp_path / "compile_commands.json"
+    compile_db.write_text(json.dumps([{"directory": str(tmp_path), "file": str(source_file), "command": f"gcc -isystem {system_dir} -c {source_file}"}]))
+
+    doc_structure = generate_doc_structure(CLangParser().load(source_file, CompilationOptionsManager(compile_db)))
+
+    assert [sub.title for sub in doc_structure.sections[0].subsections] == ["with_feature"]
 
 
 def test_generate_documentation(c_source: TranslationUnit, tmp_path: Path) -> None:
